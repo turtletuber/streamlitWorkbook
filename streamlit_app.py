@@ -6,8 +6,8 @@ import pandas as pd
 
 # Page configuration
 st.set_page_config(
-    page_title="Interactive Student Workbook",
-    page_icon="📚",
+    page_title="Project Workbook",
+    page_icon="🚀",
     layout="wide"
 )
 
@@ -15,37 +15,209 @@ st.set_page_config(
 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 
 # Initialize session state
-if "current_lesson" not in st.session_state:
-    st.session_state.current_lesson = None
-if "student_notes" not in st.session_state:
-    st.session_state.student_notes = {}
-if "student_progress" not in st.session_state:
-    st.session_state.student_progress = {}
+if "project_data" not in st.session_state:
+    st.session_state.project_data = None
+if "project_journal" not in st.session_state:
+    st.session_state.project_journal = []
+if "research_notes" not in st.session_state:
+    st.session_state.research_notes = {}
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
+if "project_milestones" not in st.session_state:
+    st.session_state.project_milestones = []
+if "reflection_log" not in st.session_state:
+    st.session_state.reflection_log = []
 
-def load_lesson_plan(uploaded_file):
-    """Load and parse the lesson plan JSON file"""
+def load_project_plan(uploaded_file):
+    """Load and parse the project plan JSON file"""
     try:
         content = json.load(uploaded_file)
-        st.session_state.current_lesson = content
-        initialize_progress_tracking(content)
+        st.session_state.project_data = content
+        initialize_project_structure(content)
         return True
     except Exception as e:
-        st.error(f"Error loading lesson plan: {e}")
+        st.error(f"Error loading project plan: {e}")
         return False
 
-def initialize_progress_tracking(lesson_plan):
-    """Initialize progress tracking for each section of the lesson"""
-    if lesson_plan["content"]:
-        sections = parse_lesson_sections(lesson_plan["content"])
-        for section in sections.keys():
-            if section not in st.session_state.student_progress:
-                st.session_state.student_progress[section] = {
-                    "completed": False,
-                    "time_spent": 0,
-                    "last_accessed": None
-                }
+def initialize_project_structure(project_data):
+    """Initialize project structure and milestones"""
+    # Extract project milestones from the lesson procedure
+    if "content" in project_data:
+        sections = parse_lesson_sections(project_data["content"])
+        if "Lesson Procedure:" in sections:
+            procedure = sections["Lesson Procedure:"]
+            steps = [step.strip() for step in procedure.split('\n') if step.strip()]
+            st.session_state.project_milestones = [
+                {"step": step, "completed": False, "evidence": "", "reflection": ""}
+                for step in steps
+            ]
+
+def get_ai_help(question, context):
+    """Get AI assistance for student questions"""
+    prompt = f"""
+    As a helpful project mentor, please help answer this student's question about their project work.
+    
+    Project Context:
+    {context}
+    
+    Student Question:
+    {question}
+    
+    Please provide a constructive response that:
+    1. Guides the student's thinking without giving direct answers
+    2. Suggests possible approaches or resources
+    3. Encourages critical thinking and creativity
+    4. Relates to real-world applications where possible
+    """
+    
+    try:
+        model = genai.GenerativeModel('gemini-1.5-pro-002')
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"Sorry, I couldn't process your question right now. Error: {str(e)}"
+
+def display_project_workbook():
+    """Display the interactive project workbook"""
+    if not st.session_state.project_data:
+        st.warning("Please upload your project plan to begin.")
+        return
+
+    project = st.session_state.project_data
+    
+    # Project Overview
+    st.title("🚀 My Project Workbook")
+    st.subheader(f"{project['subject_area']} - {project['specific_topic']}")
+
+    # Project Dashboard
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        completed_steps = len([m for m in st.session_state.project_milestones if m["completed"]])
+        total_steps = len(st.session_state.project_milestones)
+        st.metric("Project Progress", f"{completed_steps}/{total_steps} Steps")
+    
+    with col2:
+        st.metric("Project Timeline", project['delivery_timeline'])
+    
+    with col3:
+        st.metric("Research Notes", f"{len(st.session_state.research_notes)} Entries")
+
+    # Project Goals and Success Criteria
+    with st.expander("📋 Project Goals and Success Criteria", expanded=True):
+        st.markdown(f"""
+        **Project Objectives:**
+        {project['objectives']}
+        
+        **What you'll create:**
+        {parse_lesson_sections(project['content']).get('Overview:', 'Project details loading...')}
+        """)
+
+    # Project Journal
+    st.header("📔 Project Journal")
+    
+    # Add new journal entry
+    with st.expander("✏️ Add Journal Entry", expanded=True):
+        entry_date = st.date_input("Date", datetime.now())
+        entry_type = st.selectbox(
+            "Entry Type",
+            ["Progress Update", "Challenge Faced", "Breakthrough", "Question", "Research Notes"]
+        )
+        entry_content = st.text_area("What did you work on today?")
+        next_steps = st.text_area("What are your next steps?")
+        
+        if st.button("Save Entry"):
+            st.session_state.project_journal.append({
+                "date": entry_date.strftime("%Y-%m-%d"),
+                "type": entry_type,
+                "content": entry_content,
+                "next_steps": next_steps
+            })
+            st.success("Journal entry saved!")
+
+    # Project Milestones Tracker
+    st.header("🎯 Project Milestones")
+    for idx, milestone in enumerate(st.session_state.project_milestones):
+        with st.expander(f"Step {idx + 1}: {milestone['step']}", expanded=not milestone['completed']):
+            col1, col2 = st.columns([3, 1])
+            
+            with col1:
+                # Evidence of work
+                milestone['evidence'] = st.text_area(
+                    "Document your work for this step",
+                    value=milestone['evidence'],
+                    key=f"evidence_{idx}",
+                    height=100
+                )
+                
+                # Reflection
+                milestone['reflection'] = st.text_area(
+                    "Reflect on this step (What worked? What did you learn? What would you do differently?)",
+                    value=milestone['reflection'],
+                    key=f"reflection_{idx}",
+                    height=100
+                )
+                
+                # Questions/Help
+                question = st.text_input("Need help? Ask a question:", key=f"q_{idx}")
+                if st.button("Get Help", key=f"help_{idx}"):
+                    if question:
+                        response = get_ai_help(question, milestone['step'])
+                        st.session_state.chat_history.append({
+                            "step": milestone['step'],
+                            "question": question,
+                            "response": response,
+                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        })
+                        st.write("Response:", response)
+            
+            with col2:
+                # Completion status
+                milestone['completed'] = st.checkbox(
+                    "Mark as complete",
+                    value=milestone['completed'],
+                    key=f"complete_{idx}"
+                )
+
+    # Research and Resources
+    st.header("📚 Research Notes")
+    with st.expander("Add Research Notes", expanded=False):
+        source = st.text_input("Source/Reference")
+        notes = st.text_area("Key Points and Notes")
+        if st.button("Save Research Notes"):
+            if source:
+                st.session_state.research_notes[source] = notes
+                st.success("Research notes saved!")
+
+    # Project Reflection Log
+    st.header("💭 Overall Project Reflection")
+    if st.button("Add Reflection"):
+        reflection = st.text_area(
+            "Reflect on your project progress, challenges, and learning",
+            height=200
+        )
+        if reflection:
+            st.session_state.reflection_log.append({
+                "date": datetime.now().strftime("%Y-%m-%d"),
+                "reflection": reflection
+            })
+
+    # Export Project Work
+    if st.button("Export Project Work"):
+        export_data = {
+            "project_info": project,
+            "journal_entries": st.session_state.project_journal,
+            "milestones": st.session_state.project_milestones,
+            "research_notes": st.session_state.research_notes,
+            "reflection_log": st.session_state.reflection_log,
+            "questions_and_help": st.session_state.chat_history
+        }
+        
+        st.download_button(
+            label="Download Project Portfolio",
+            data=json.dumps(export_data, indent=2),
+            file_name=f"project_portfolio_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+            mime="application/json"
+        )
 
 def parse_lesson_sections(content):
     """Parse lesson content into sections"""
@@ -70,157 +242,31 @@ def parse_lesson_sections(content):
     
     return sections
 
-def get_ai_help(question, context):
-    """Get AI assistance for student questions"""
-    prompt = f"""
-    As a helpful teaching assistant, please help answer this student's question about their lesson.
-    
-    Lesson Context:
-    {context}
-    
-    Student Question:
-    {question}
-    
-    Please provide a clear, encouraging, and grade-appropriate response that helps the student understand 
-    the concept better without simply giving away answers.
-    """
-    
-    try:
-        model = genai.GenerativeModel('gemini-1.5-pro-002')
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        return f"Sorry, I couldn't process your question right now. Error: {str(e)}"
-
-def display_student_workbook():
-    """Display the interactive student workbook"""
-    if not st.session_state.current_lesson:
-        st.warning("Please upload a lesson plan to begin.")
-        return
-
-    lesson = st.session_state.current_lesson
-    
-    # Display lesson header
-    st.title("📚 Student Workbook")
-    st.subheader(f"{lesson['subject_area']} - {lesson['specific_topic']}")
-    
-    # Progress Overview
-    with st.expander("📊 Your Progress", expanded=True):
-        progress_df = pd.DataFrame([
-            {
-                "Section": section,
-                "Status": "✅ Completed" if data["completed"] else "⏳ In Progress",
-                "Time Spent (minutes)": data["time_spent"]
-            }
-            for section, data in st.session_state.student_progress.items()
-        ])
-        st.dataframe(progress_df, use_container_width=True)
-
-    # Parse and display sections
-    sections = parse_lesson_sections(lesson['content'])
-    
-    for section_title, content in sections.items():
-        with st.expander(f"📝 {section_title}", expanded=True):
-            # Display section content
-            st.markdown(content)
-            
-            # Notes area
-            notes_key = f"notes_{section_title}"
-            if notes_key not in st.session_state.student_notes:
-                st.session_state.student_notes[notes_key] = ""
-            
-            st.write("---")
-            st.subheader("📝 Your Notes")
-            notes = st.text_area(
-                "Take notes here",
-                value=st.session_state.student_notes[notes_key],
-                key=notes_key,
-                height=150
-            )
-            st.session_state.student_notes[notes_key] = notes
-            
-            # Questions for this section
-            st.write("---")
-            st.subheader("❓ Questions")
-            question = st.text_input(
-                "Ask a question about this section",
-                key=f"question_{section_title}"
-            )
-            
-            if st.button("Get Help", key=f"help_{section_title}"):
-                if question:
-                    response = get_ai_help(question, content)
-                    st.session_state.chat_history.append({
-                        "section": section_title,
-                        "question": question,
-                        "response": response,
-                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    })
-                    st.write("Response:", response)
-            
-            # Section completion tracking
-            completed = st.checkbox(
-                "Mark section as complete",
-                value=st.session_state.student_progress[section_title]["completed"],
-                key=f"complete_{section_title}"
-            )
-            if completed != st.session_state.student_progress[section_title]["completed"]:
-                st.session_state.student_progress[section_title]["completed"] = completed
-                st.session_state.student_progress[section_title]["last_accessed"] = datetime.now()
-
-    # Question History
-    with st.expander("📋 Question History", expanded=False):
-        if st.session_state.chat_history:
-            for entry in reversed(st.session_state.chat_history):
-                st.write(f"**Section:** {entry['section']}")
-                st.write(f"**Question:** {entry['question']}")
-                st.write(f"**Response:** {entry['response']}")
-                st.write(f"**Time:** {entry['timestamp']}")
-                st.write("---")
-        else:
-            st.write("No questions asked yet.")
-
-    # Export functionality
-    if st.button("Export Progress and Notes"):
-        export_data = {
-            "lesson_info": {
-                "subject": lesson["subject_area"],
-                "topic": lesson["specific_topic"],
-                "grade_level": lesson["grade_level"]
-            },
-            "progress": st.session_state.student_progress,
-            "notes": st.session_state.student_notes,
-            "question_history": st.session_state.chat_history
-        }
-        
-        st.download_button(
-            label="Download Progress Report",
-            data=json.dumps(export_data, indent=2),
-            file_name=f"workbook_progress_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-            mime="application/json"
-        )
-
 def main():
-    st.sidebar.title("📚 Student Workbook")
+    st.sidebar.title("🚀 Project Workbook")
     
     # File upload
     uploaded_file = st.sidebar.file_uploader(
-        "Upload Lesson Plan",
+        "Upload Project Plan",
         type=["json"],
-        help="Upload the JSON lesson plan file"
+        help="Upload your project plan file"
     )
     
     if uploaded_file:
-        if load_lesson_plan(uploaded_file):
-            display_student_workbook()
+        if load_project_plan(uploaded_file):
+            display_project_workbook()
     else:
-        st.write("Welcome to your interactive workbook! Please upload a lesson plan to begin.")
+        st.write("Welcome to your project workbook! Upload your project plan to begin.")
         st.write("""
-        ### Features:
-        - 📝 Take notes for each section
-        - ❓ Ask questions and get AI assistance
-        - ✅ Track your progress
-        - 📊 Export your work and progress
+        ### What you can do here:
+        - 📔 Keep a project journal
+        - 🎯 Track your project milestones
+        - 📚 Take research notes
+        - ❓ Get help when you need it
+        - 💭 Reflect on your learning
+        - 📊 Export your project portfolio
+        
+        This workbook helps you document your project journey, from initial ideas to final reflection!
         """)
 
 if __name__ == "__main__":
