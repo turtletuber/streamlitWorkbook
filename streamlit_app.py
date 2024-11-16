@@ -1,12 +1,13 @@
 import streamlit as st
-import google.generativeai as genai
 import json
-import os
+import google.generativeai as genai
+from datetime import datetime
+import pandas as pd
 
 # Page configuration
 st.set_page_config(
-    page_title="Student Interactive Workbook",
-    page_icon="📘",
+    page_title="Interactive Student Workbook",
+    page_icon="📚",
     layout="wide"
 )
 
@@ -14,23 +15,37 @@ st.set_page_config(
 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 
 # Initialize session state
+if "current_lesson" not in st.session_state:
+    st.session_state.current_lesson = None
 if "student_notes" not in st.session_state:
     st.session_state.student_notes = {}
-if "student_answers" not in st.session_state:
-    st.session_state.student_answers = {}
-if "lesson_content" not in st.session_state:
-    st.session_state.lesson_content = None
+if "student_progress" not in st.session_state:
+    st.session_state.student_progress = {}
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-def load_lesson_plan(file):
-    """Load lesson plan JSON file"""
+def load_lesson_plan(uploaded_file):
+    """Load and parse the lesson plan JSON file"""
     try:
-        content = json.load(file)
-        return content
+        content = json.load(uploaded_file)
+        st.session_state.current_lesson = content
+        initialize_progress_tracking(content)
+        return True
     except Exception as e:
         st.error(f"Error loading lesson plan: {e}")
-        return None
+        return False
+
+def initialize_progress_tracking(lesson_plan):
+    """Initialize progress tracking for each section of the lesson"""
+    if lesson_plan["content"]:
+        sections = parse_lesson_sections(lesson_plan["content"])
+        for section in sections.keys():
+            if section not in st.session_state.student_progress:
+                st.session_state.student_progress[section] = {
+                    "completed": False,
+                    "time_spent": 0,
+                    "last_accessed": None
+                }
 
 def parse_lesson_sections(content):
     """Parse lesson content into sections"""
@@ -38,9 +53,6 @@ def parse_lesson_sections(content):
     current_section = None
     current_content = []
     
-    if not content:
-        return sections
-        
     for line in content.split('\n'):
         if any(section in line for section in ["Overview:", "Learning Objectives:", "Required Materials:", 
                                              "Preparation Steps:", "Lesson Procedure:", 
@@ -53,128 +65,163 @@ def parse_lesson_sections(content):
         elif current_section and line.strip():
             current_content.append(line.strip())
     
-    # Add the last section
     if current_section and current_content:
         sections[current_section] = '\n'.join(current_content).strip()
     
     return sections
 
-def ai_respond(user_input):
-    """Get AI response to student's question"""
+def get_ai_help(question, context):
+    """Get AI assistance for student questions"""
     prompt = f"""
-    The student asked: "{user_input}"
-    Provide a helpful, age-appropriate response to assist the student in understanding the lesson material.
+    As a helpful teaching assistant, please help answer this student's question about their lesson.
+    
+    Lesson Context:
+    {context}
+    
+    Student Question:
+    {question}
+    
+    Please provide a clear, encouraging, and grade-appropriate response that helps the student understand 
+    the concept better without simply giving away answers.
     """
+    
     try:
         model = genai.GenerativeModel('gemini-1.5-pro-002')
         response = model.generate_content(prompt)
-        return response.text.strip()
+        return response.text
     except Exception as e:
-        st.error(f"Error getting AI response: {e}")
-        return "I'm sorry, I couldn't process your question."
+        return f"Sorry, I couldn't process your question right now. Error: {str(e)}"
 
-def main():
-    st.title("📘 Student Interactive Workbook")
-    st.write("Follow along with your lesson, take notes, and interact with the AI assistant.")
+def display_student_workbook():
+    """Display the interactive student workbook"""
+    if not st.session_state.current_lesson:
+        st.warning("Please upload a lesson plan to begin.")
+        return
 
-    # File uploader to load lesson plan
-    uploaded_file = st.file_uploader("Upload Lesson Plan JSON File", type="json")
-
-    if uploaded_file is not None:
-        lesson_plan = load_lesson_plan(uploaded_file)
-        if lesson_plan:
-            st.session_state.lesson_content = lesson_plan
-            st.success("Lesson plan loaded successfully!")
-            st.experimental_rerun()
-
-    if st.session_state.lesson_content:
-        lesson_data = st.session_state.lesson_content
-
-        # Display lesson metadata
-        st.header(f"Lesson: {lesson_data.get('specific_topic', 'N/A')}")
-        st.markdown(f"""
-        **Grade Level:** {lesson_data.get('grade_level', 'N/A')}  
-        **Subject:** {lesson_data.get('subject_area', 'N/A')}  
-        **Delivery Timeline:** {lesson_data.get('delivery_timeline', 'N/A')}
-        """)
-        
-        # Parse lesson sections
-        sections = parse_lesson_sections(lesson_data.get('content', ''))
-
-        # Display sections for students to interact with
-        for section, content in sections.items():
-            if section == "Learning Objectives:":
-                st.subheader(section.replace(":", ""))
-                st.markdown(content)
-                continue  # No student interaction needed here
-
-            with st.expander(f"🔍 {section.replace(':', '')}", expanded=True):
-                st.markdown(content)
-
-                # Student Notes
-                note_key = f"note_{section}"
-                st.text_area(
-                    "Your Notes:",
-                    value=st.session_state.student_notes.get(note_key, ""),
-                    key=note_key,
-                    height=100
-                )
-                st.session_state.student_notes[note_key] = st.session_state[note_key]
-
-                # Student Answers (if section contains questions)
-                if "?" in content:
-                    answer_key = f"answer_{section}"
-                    st.text_input(
-                        "Your Answer:",
-                        value=st.session_state.student_answers.get(answer_key, ""),
-                        key=answer_key
-                    )
-                    st.session_state.student_answers[answer_key] = st.session_state[answer_key]
-
-        # AI Assistant Chat
-        st.header("🤖 Ask the AI Assistant")
-        user_question = st.text_input("Have a question about the lesson?")
-        if st.button("Ask"):
-            if user_question:
-                with st.spinner("AI Assistant is thinking..."):
-                    response = ai_respond(user_question)
-                    st.session_state.chat_history.append({"user": user_question, "ai": response})
-                    st.success("AI Assistant has responded!")
-                    st.experimental_rerun()
-            else:
-                st.warning("Please enter a question.")
-
-        # Display chat history
-        if st.session_state.chat_history:
-            st.subheader("Chat History")
-            for chat in st.session_state.chat_history:
-                st.markdown(f"**You:** {chat['user']}")
-                st.markdown(f"**AI Assistant:** {chat['ai']}")
-                st.write("---")
-
-        # Save Notes and Answers
-        if st.button("Save Your Progress"):
-            student_data = {
-                "notes": st.session_state.student_notes,
-                "answers": st.session_state.student_answers,
-                "chat_history": st.session_state.chat_history
+    lesson = st.session_state.current_lesson
+    
+    # Display lesson header
+    st.title("📚 Student Workbook")
+    st.subheader(f"{lesson['subject_area']} - {lesson['specific_topic']}")
+    
+    # Progress Overview
+    with st.expander("📊 Your Progress", expanded=True):
+        progress_df = pd.DataFrame([
+            {
+                "Section": section,
+                "Status": "✅ Completed" if data["completed"] else "⏳ In Progress",
+                "Time Spent (minutes)": data["time_spent"]
             }
-            file_name = f"student_progress_{lesson_data.get('specific_topic', 'lesson')}.json"
-            with open(file_name, 'w') as f:
-                json.dump(student_data, f, indent=2)
-            st.success(f"Your progress has been saved to {file_name}")
+            for section, data in st.session_state.student_progress.items()
+        ])
+        st.dataframe(progress_df, use_container_width=True)
 
-        # Download Student Progress
+    # Parse and display sections
+    sections = parse_lesson_sections(lesson['content'])
+    
+    for section_title, content in sections.items():
+        with st.expander(f"📝 {section_title}", expanded=True):
+            # Display section content
+            st.markdown(content)
+            
+            # Notes area
+            notes_key = f"notes_{section_title}"
+            if notes_key not in st.session_state.student_notes:
+                st.session_state.student_notes[notes_key] = ""
+            
+            st.write("---")
+            st.subheader("📝 Your Notes")
+            notes = st.text_area(
+                "Take notes here",
+                value=st.session_state.student_notes[notes_key],
+                key=notes_key,
+                height=150
+            )
+            st.session_state.student_notes[notes_key] = notes
+            
+            # Questions for this section
+            st.write("---")
+            st.subheader("❓ Questions")
+            question = st.text_input(
+                "Ask a question about this section",
+                key=f"question_{section_title}"
+            )
+            
+            if st.button("Get Help", key=f"help_{section_title}"):
+                if question:
+                    response = get_ai_help(question, content)
+                    st.session_state.chat_history.append({
+                        "section": section_title,
+                        "question": question,
+                        "response": response,
+                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    })
+                    st.write("Response:", response)
+            
+            # Section completion tracking
+            completed = st.checkbox(
+                "Mark section as complete",
+                value=st.session_state.student_progress[section_title]["completed"],
+                key=f"complete_{section_title}"
+            )
+            if completed != st.session_state.student_progress[section_title]["completed"]:
+                st.session_state.student_progress[section_title]["completed"] = completed
+                st.session_state.student_progress[section_title]["last_accessed"] = datetime.now()
+
+    # Question History
+    with st.expander("📋 Question History", expanded=False):
+        if st.session_state.chat_history:
+            for entry in reversed(st.session_state.chat_history):
+                st.write(f"**Section:** {entry['section']}")
+                st.write(f"**Question:** {entry['question']}")
+                st.write(f"**Response:** {entry['response']}")
+                st.write(f"**Time:** {entry['timestamp']}")
+                st.write("---")
+        else:
+            st.write("No questions asked yet.")
+
+    # Export functionality
+    if st.button("Export Progress and Notes"):
+        export_data = {
+            "lesson_info": {
+                "subject": lesson["subject_area"],
+                "topic": lesson["specific_topic"],
+                "grade_level": lesson["grade_level"]
+            },
+            "progress": st.session_state.student_progress,
+            "notes": st.session_state.student_notes,
+            "question_history": st.session_state.chat_history
+        }
+        
         st.download_button(
-            label="Download Your Progress",
-            data=json.dumps({
-                "notes": st.session_state.student_notes,
-                "answers": st.session_state.student_answers,
-                "chat_history": st.session_state.chat_history
-            }, indent=2),
-            file_name=f"student_progress_{lesson_data.get('specific_topic', 'lesson')}.json",
+            label="Download Progress Report",
+            data=json.dumps(export_data, indent=2),
+            file_name=f"workbook_progress_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
             mime="application/json"
         )
+
+def main():
+    st.sidebar.title("📚 Student Workbook")
+    
+    # File upload
+    uploaded_file = st.sidebar.file_uploader(
+        "Upload Lesson Plan",
+        type=["json"],
+        help="Upload the JSON lesson plan file"
+    )
+    
+    if uploaded_file:
+        if load_lesson_plan(uploaded_file):
+            display_student_workbook()
+    else:
+        st.write("Welcome to your interactive workbook! Please upload a lesson plan to begin.")
+        st.write("""
+        ### Features:
+        - 📝 Take notes for each section
+        - ❓ Ask questions and get AI assistance
+        - ✅ Track your progress
+        - 📊 Export your work and progress
+        """)
 
 if __name__ == "__main__":
     main()
